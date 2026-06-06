@@ -223,7 +223,6 @@ What the consumer does with the payload is outside the scope of this specificati
 ```json
 {
   "stream_id": "string",
-  "kind": "string",
   "title": "string | null",
   "data": "object | null",
   "size": "string | null"
@@ -233,7 +232,6 @@ What the consumer does with the payload is outside the scope of this specificati
 | Field | Required | Description |
 |-------|----------|-------------|
 | `stream_id` | Yes | Stable identifier for this data stream, unique within the session |
-| `kind` | Yes | Consumer-defined type identifier describing the nature of the data. WEP does not define or constrain kind values. |
 | `title` | No | Optional human-readable label for this data stream |
 | `data` | No | Initial data payload. Schema is determined by `kind` and is outside the scope of this specification. |
 | `size` | No | Optional hint whose semantics are defined by the consumer implementation |
