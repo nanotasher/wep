@@ -3,7 +3,6 @@
 
 **Status:** Draft  
 **Authors:** Nathan Rose  
-**Repository:** https://github.com/nanotasher/wep  
 **License:** Apache-2.0
 
 ---
