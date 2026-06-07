@@ -30,20 +30,20 @@ A secondary goal of WEP is backward compatibility. Consumers that do not impleme
 
 ## 2. Terminology
 
-| Term                           | Definition                                                                                              |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| **Agent**                      | The AI backend producing the WEP event stream                                                           |
-| **Consumer**                   | Any client receiving and processing the WEP event stream                                                |
-| **Turn**                       | A single request-response cycle between a user and the agent                                            |
-| **Stream**                     | The SSE connection carrying WEP events for a turn or session                                            |
-| **Signal**                     | A structured event carrying operational status or a data payload                                        |
-| **Correlation ID**             | A unique identifier assigned to each event, used to relate events within and across turns               |
-| **work_id**                    | An identifier correlating a `wep.work.start` event to its corresponding `wep.work.stop` event           |
-| **stream_id**                  | An identifier scoped to a session, correlating open, update, and close events for a single data payload |
-| **data_id**                    | An identifier for a single-shot data payload delivered via `wep.data.send`                              |
-| **Profile**                    | A WEP connection model defining stream lifecycle behavior                                               |
-| **Request-response profile**   | A profile in which the stream opens per turn and closes on `[DONE]`                                     |
-| **Persistent session profile** | A profile in which the stream remains open across turns                                                 |
+| Term                           | Definition                                                                                                     |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| **Agent**                      | The AI backend producing the WEP event stream                                                                  |
+| **Consumer**                   | Any client receiving and processing the WEP event stream                                                       |
+| **Turn**                       | A single request-response cycle between a user and the agent                                                   |
+| **Stream**                     | The SSE connection carrying WEP events for a turn or session                                                   |
+| **Signal**                     | A structured event carrying operational status or a data payload                                               |
+| **Correlation ID**             | A unique identifier assigned to each event, used to relate events within and across turns                      |
+| **work_id**                    | An identifier correlating a `wep.work.start` event to its corresponding `wep.work.stop` event                  |
+| **stream_id**                  | An identifier scoped to a job, correlating open, update, and close events for a single streaming data payload  |
+| **data_id**                    | An identifier for a single-shot data payload delivered via `wep.work.data.send`                                |
+| **Profile**                    | A WEP connection model defining stream lifecycle behavior                                                       |
+| **Request-response profile**   | A profile in which the stream opens per turn and closes on `[DONE]`                                            |
+| **Persistent session profile** | A profile in which the stream remains open across turns                                                        |
 
 ---
 
@@ -57,7 +57,7 @@ This adoption has a practical consequence: any tool, platform, or library that s
 - A CloudEvents router can forward `wep.work.stop` events where `status.ok` is `false` to an alerting system
 - A CloudEvents-compatible observability platform will display the full event envelope correctly
 
-WEP events are organized across four namespaces: `wep.text`, `wep.work`, `wep.stream`, and `wep.data`. CloudEvents consumers route by the `type` field and can filter on any of these namespaces independently using standard mechanisms. WEP-unaware consumers receive and process the envelope correctly; they simply have no handling for WEP-specific `data` payloads, which they will ignore.
+WEP event types are organized across three top-level namespaces: `wep.text`, `wep.work`, and `wep.session`. Data delivery events are nested under `wep.work` as `wep.work.stream.*` and `wep.work.data.*`, making their job-scoped lifecycle explicit in the type string itself. CloudEvents consumers can filter on any namespace or sub-namespace independently using standard mechanisms. WEP-unaware consumers receive and process the envelope correctly; they simply have no handling for WEP-specific `data` payloads, which they will ignore.
 
 ### 3.1 Required CloudEvents Attributes
 
@@ -120,7 +120,7 @@ A WEP-compliant server MUST emit `[DONE]` as the final frame of every turn, incl
 WEP servers MUST include the following HTTP response header on all SSE responses:
 
 ```
-wep-version: 0.1
+wep-version: 0.2
 ```
 
 Consumers receiving an unknown major version SHOULD log a warning. Consumers receiving a higher minor version MUST process all known event types and ignore unknown ones.
@@ -129,19 +129,38 @@ Consumers receiving an unknown major version SHOULD log a warning. Consumers rec
 
 ## 5. Event Types
 
-WEP event types are organized across four namespaces. `wep.stream.*` and `wep.data.*` events are only valid within the lifecycle of a `wep.work.*` job. `wep.text.*` events are independent and may occur at any point during a turn.
+WEP event types are organized across three top-level namespaces. The hierarchy is self-describing: a consumer can infer lifecycle context from the type string alone.
 
-| Type                | Description                                                                       |
-| ------------------- | --------------------------------------------------------------------------------- |
-| `wep.text.delta`    | A text fragment comprising part of the agent's conversational output              |
-| `wep.work.start`    | The agent has begun a background operation                                        |
-| `wep.work.stop`     | A background operation has ended; status field indicates success or failure       |
-| `wep.stream.open`   | The agent is delivering a named, typed streaming data payload                     |
-| `wep.stream.update` | The agent is updating a previously opened streaming data payload                  |
-| `wep.stream.close`  | The agent signals that a named streaming data payload is no longer relevant       |
-| `wep.data.send`     | The agent is delivering a complete, single-shot data payload                      |
-| `wep.session.error` | An unrecoverable error has occurred in the agent backend                          |
-| `wep.session.done`  | Typed synonym for the `[DONE]` sentinel; MAY be emitted before the sentinel frame |
+```
+wep.text.*
+  └── wep.text.delta
+
+wep.work.*
+  ├── wep.work.start
+  ├── wep.work.stop
+  ├── wep.work.stream.open
+  ├── wep.work.stream.update
+  ├── wep.work.stream.close
+  └── wep.work.data.send
+
+wep.session.*
+  ├── wep.session.error
+  └── wep.session.done
+```
+
+`wep.text.*` events are independent and may occur at any point during a turn. `wep.work.stream.*` and `wep.work.data.*` events are only valid within the lifecycle of a `wep.work.start` / `wep.work.stop` pair.
+
+| Type                      | Description                                                                       |
+| ------------------------- | --------------------------------------------------------------------------------- |
+| `wep.text.delta`          | A text fragment comprising part of the agent's conversational output              |
+| `wep.work.start`          | The agent has begun a background operation                                        |
+| `wep.work.stop`           | A background operation has ended; status field indicates success or failure       |
+| `wep.work.stream.open`    | The agent is delivering a named, typed streaming data payload within a job        |
+| `wep.work.stream.update`  | The agent is updating a previously opened streaming data payload                  |
+| `wep.work.stream.close`   | The agent signals that a named streaming data payload is no longer relevant       |
+| `wep.work.data.send`      | The agent is delivering a complete, single-shot data payload within a job         |
+| `wep.session.error`       | An unrecoverable error has occurred in the agent backend                          |
+| `wep.session.done`        | Typed synonym for the `[DONE]` sentinel; MAY be emitted before the sentinel frame |
 
 ---
 
@@ -165,7 +184,7 @@ A fragment of the agent's conversational text output. Consumers appending text d
 
 ### 6.2 `wep.work.start`
 
-Signals that the agent has begun a background operation. Emitted immediately before a tool or skill invocation begins. The turn does not terminate on receipt of this event — the agent MAY emit further events, including `wep.stream.*`, `wep.data.*`, and `wep.text.*` events, before the operation concludes.
+Signals that the agent has begun a background operation. Emitted immediately before a tool or skill invocation begins. The turn does not terminate on receipt of this event — the agent MAY emit further events, including `wep.work.stream.*`, `wep.work.data.*`, and `wep.text.*` events, before the operation concludes.
 
 Every `wep.work.start` MUST be followed by a corresponding `wep.work.stop` event in the same turn. Consumers MUST NOT assume success or failure until `wep.work.stop` is received.
 
@@ -209,31 +228,29 @@ Every `wep.work.stop` corresponds to exactly one `wep.work.start` via `work_id`.
 | `status.error`  | No       | Short error summary if `ok` is `false`                               |
 | `status.detail` | No       | Optional technical detail about the error                            |
 
-### 6.4 `wep.stream.open`
+### 6.4 `wep.work.stream.open`
 
-Signals that the agent is delivering a named, typed streaming data payload within the current job. The `stream_id` field identifies this payload for subsequent `wep.stream.update` and `wep.stream.close` events within the session.
+Signals that the agent is delivering a named, typed streaming data payload within the current job. The `stream_id` field identifies this payload for subsequent `wep.work.stream.update` and `wep.work.stream.close` events within the session.
 
 This event is only valid within the lifecycle of a `wep.work.start` / `wep.work.stop` pair. What the consumer does with the payload is outside the scope of this specification. Consumers MAY render it visually, pass it to a downstream system, use it as context, or ignore it.
 
 ```json
 {
   "stream_id": "string",
-  "kind": "string",
   "title": "string | null",
   "data": "object | null",
   "size": "string | null"
 }
 ```
 
-| Field       | Required | Description                                                                                                       |
-| ----------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
-| `stream_id` | Yes      | Stable identifier for this data stream, unique within the session                                                 |
-| `kind`      | Yes      | Consumer-defined type identifier describing the nature of the data. WEP does not define or constrain kind values. |
-| `title`     | No       | Optional human-readable label for this data stream                                                                |
-| `data`      | No       | Initial data payload. Schema is determined by `kind` and is outside the scope of this specification.              |
-| `size`      | No       | Optional hint whose semantics are defined by the consumer implementation                                          |
+| Field       | Required | Description                                                                                          |
+| ----------- | -------- | ---------------------------------------------------------------------------------------------------- |
+| `stream_id` | Yes      | Stable identifier for this data stream, unique within the session                                    |
+| `title`     | No       | Optional human-readable label for this data stream                                                   |
+| `data`      | No       | Initial data payload. Schema is consumer-defined and outside the scope of this specification.        |
+| `size`      | No       | Optional hint whose semantics are defined by the consumer implementation                             |
 
-### 6.5 `wep.stream.update`
+### 6.5 `wep.work.stream.update`
 
 Updates the data payload of a previously opened stream. Only valid within the current job lifecycle.
 
@@ -245,15 +262,15 @@ Updates the data payload of a previously opened stream. Only valid within the cu
 }
 ```
 
-| Field       | Required | Description                                                                |
-| ----------- | -------- | -------------------------------------------------------------------------- |
-| `stream_id` | Yes      | Must match the `stream_id` of a previously emitted `wep.stream.open` event |
-| `title`     | No       | Updated title, if changed                                                  |
-| `data`      | No       | Updated data payload                                                       |
+| Field       | Required | Description                                                                         |
+| ----------- | -------- | ----------------------------------------------------------------------------------- |
+| `stream_id` | Yes      | Must match the `stream_id` of a previously emitted `wep.work.stream.open` event    |
+| `title`     | No       | Updated title, if changed                                                           |
+| `data`      | No       | Updated data payload                                                                |
 
-Servers MUST NOT emit `wep.stream.update` for a `stream_id` that has not been opened with `wep.stream.open` in the current session.
+Servers MUST NOT emit `wep.work.stream.update` for a `stream_id` that has not been opened with `wep.work.stream.open` in the current session.
 
-### 6.6 `wep.stream.close`
+### 6.6 `wep.work.stream.close`
 
 Signals that a named data stream is no longer relevant. Consumer behavior on receipt of this event is implementation-defined. Only valid within the current job lifecycle.
 
@@ -263,33 +280,31 @@ Signals that a named data stream is no longer relevant. Consumer behavior on rec
 }
 ```
 
-| Field       | Required | Description                                                                |
-| ----------- | -------- | -------------------------------------------------------------------------- |
-| `stream_id` | Yes      | Must match the `stream_id` of a previously emitted `wep.stream.open` event |
+| Field       | Required | Description                                                                      |
+| ----------- | -------- | -------------------------------------------------------------------------------- |
+| `stream_id` | Yes      | Must match the `stream_id` of a previously emitted `wep.work.stream.open` event |
 
-Servers MUST NOT emit `wep.stream.close` for a `stream_id` that has not been opened in the current session.
+Servers MUST NOT emit `wep.work.stream.close` for a `stream_id` that has not been opened in the current session.
 
-### 6.7 `wep.data.send`
+### 6.7 `wep.work.data.send`
 
-Delivers a complete, single-shot data payload within the current job. Unlike `wep.stream.open` / `wep.stream.update` / `wep.stream.close`, this event carries the entire payload in a single frame and requires no follow-up. Suitable for images, chart data, lists, rendered documents, or any content that does not require incremental updates.
+Delivers a complete, single-shot data payload within the current job. Unlike the `wep.work.stream.*` lifecycle, this event carries the entire payload in a single frame and requires no follow-up. Suitable for images, chart data, lists, rendered documents, or any content that does not require incremental updates.
 
 This event is only valid within the lifecycle of a `wep.work.start` / `wep.work.stop` pair.
 
 ```json
 {
   "data_id": "string",
-  "kind": "string",
   "title": "string | null",
   "data": "object"
 }
 ```
 
-| Field     | Required | Description                                                                                                       |
-| --------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
-| `data_id` | Yes      | Unique identifier for this payload within the session                                                             |
-| `kind`    | Yes      | Consumer-defined type identifier describing the nature of the data. WEP does not define or constrain kind values. |
-| `title`   | No       | Optional human-readable label                                                                                     |
-| `data`    | Yes      | Complete data payload. Schema is determined by `kind` and is outside the scope of this specification.             |
+| Field     | Required | Description                                                                                   |
+| --------- | -------- | --------------------------------------------------------------------------------------------- |
+| `data_id` | Yes      | Unique identifier for this payload within the session                                         |
+| `title`   | No       | Optional human-readable label                                                                 |
+| `data`    | Yes      | Complete data payload. Schema is consumer-defined and outside the scope of this specification.|
 
 ### 6.8 `wep.session.error`
 
@@ -304,6 +319,14 @@ Signals an unrecoverable error in the agent backend. The turn terminates after t
 | Field     | Required | Description                      |
 | --------- | -------- | -------------------------------- |
 | `message` | Yes      | Human-readable error description |
+
+### 6.9 `wep.session.done`
+
+A typed synonym for the `[DONE]` sentinel. MAY be emitted as a structured event immediately before the `[DONE]` frame. Carries no payload. Consumers MUST NOT rely on this event in place of the `[DONE]` sentinel — both may be present, but only `[DONE]` is guaranteed.
+
+```json
+{}
+```
 
 ---
 
@@ -366,8 +389,8 @@ A WEP-compliant server MUST:
 3. Always emit `[DONE]` as the final frame of every turn
 4. Assign a unique `id` to every event
 5. Include `specversion`, `source`, `time`, and `datacontenttype` on every event
-6. Not emit `wep.stream.update` or `wep.stream.close` for a `stream_id` not opened in the current session
-7. Not emit `wep.stream.*` or `wep.data.*` events outside the lifecycle of a `wep.work.start` / `wep.work.stop` pair
+6. Not emit `wep.work.stream.update` or `wep.work.stream.close` for a `stream_id` not opened in the current session
+7. Not emit `wep.work.stream.*` or `wep.work.data.*` events outside the lifecycle of a `wep.work.start` / `wep.work.stop` pair
 8. Always emit a `wep.work.stop` for every `wep.work.start` in the same turn, regardless of outcome
 9. Declare which connection profile the implementation uses
 
@@ -386,32 +409,32 @@ A WEP-compliant consumer MUST:
 2. Route events by the CloudEvents `type` field
 3. Cease processing turn output on receipt of `[DONE]`
 4. Handle unknown event types gracefully — log and ignore
-5. Handle unknown `kind` values in `wep.stream.open` and `wep.data.send` events gracefully
-6. Not assume success or failure from a `wep.work.start` event; always wait for `wep.work.stop`
+5. Not assume success or failure from a `wep.work.start` event; always wait for `wep.work.stop`
 
 A WEP-compliant consumer SHOULD:
 
 1. Verify the `wep-version` header and log a warning on version mismatch
 2. Use the CloudEvents `id` field as the correlation identifier for event tracking
 3. Use `work_id` to correlate `wep.work.start` and `wep.work.stop` event pairs
-4. Use `stream_id` to correlate `wep.stream.open`, `wep.stream.update`, and `wep.stream.close` event sequences
+4. Use `stream_id` to correlate `wep.work.stream.open`, `wep.work.stream.update`, and `wep.work.stream.close` event sequences
+5. Open a UI widget or equivalent affordance on receipt of `wep.work.start` and resolve or dismiss it on receipt of `wep.work.stop`
 
 ---
 
 ## Appendix A — Complete Stream Example
 
-The following example shows a complete WEP stream for a single request-response turn involving a tool call and streaming data payload delivery. Events are compacted for readability.
+The following example shows a complete WEP stream for a single request-response turn involving a tool call and a streaming data payload. Events are compacted for readability.
 
 ```
 data: {"specversion":"1.0","type":"wep.text.delta","source":"agent/sessions/s1","id":"evt_001","time":"2026-06-06T00:21:00Z","datacontenttype":"application/json","data":{"text":"Of course. Let me pull that up."}}
 
 data: {"specversion":"1.0","type":"wep.work.start","source":"agent/sessions/s1","id":"evt_002","time":"2026-06-06T00:21:01Z","datacontenttype":"application/json","data":{"work_id":"work_001","label":"Fetching portfolio data"}}
 
-data: {"specversion":"1.0","type":"wep.stream.open","source":"agent/sessions/s1","id":"evt_003","time":"2026-06-06T00:21:02Z","datacontenttype":"application/json","data":{"stream_id":"feed_001","kind":"chart","title":"Portfolio Overview","data":{}}}
+data: {"specversion":"1.0","type":"wep.work.stream.open","source":"agent/sessions/s1","id":"evt_003","time":"2026-06-06T00:21:02Z","datacontenttype":"application/json","data":{"stream_id":"feed_001","title":"Portfolio Overview","data":{}}}
 
-data: {"specversion":"1.0","type":"wep.stream.update","source":"agent/sessions/s1","id":"evt_004","time":"2026-06-06T00:21:03Z","datacontenttype":"application/json","data":{"stream_id":"feed_001","data":{...}}}
+data: {"specversion":"1.0","type":"wep.work.stream.update","source":"agent/sessions/s1","id":"evt_004","time":"2026-06-06T00:21:03Z","datacontenttype":"application/json","data":{"stream_id":"feed_001","data":{...}}}
 
-data: {"specversion":"1.0","type":"wep.stream.close","source":"agent/sessions/s1","id":"evt_005","time":"2026-06-06T00:21:04Z","datacontenttype":"application/json","data":{"stream_id":"feed_001"}}
+data: {"specversion":"1.0","type":"wep.work.stream.close","source":"agent/sessions/s1","id":"evt_005","time":"2026-06-06T00:21:04Z","datacontenttype":"application/json","data":{"stream_id":"feed_001"}}
 
 data: {"specversion":"1.0","type":"wep.work.stop","source":"agent/sessions/s1","id":"evt_006","time":"2026-06-06T00:21:04Z","datacontenttype":"application/json","data":{"work_id":"work_001","status":{"ok":true}}}
 
@@ -426,16 +449,16 @@ data: [DONE]
 
 ### Asynchronous job (streaming data)
 
-An agent operation that delivers data incrementally — for example, live telemetry or streaming stock prices updated on a 5-minute interval.
+An agent operation that delivers data incrementally — for example, live telemetry or stock prices updated on a recurring interval.
 
 ```
-wep.work.start   (work_id: "work_001", label: "Fetching live feed")
-wep.stream.open  (stream_id: "feed_001", kind: "timeseries", title: "AAPL — 5m")
-wep.stream.update(stream_id: "feed_001", data: {...})
-wep.stream.update(stream_id: "feed_001", data: {...})
-wep.stream.update(stream_id: "feed_001", data: {...})
-wep.stream.close (stream_id: "feed_001")
-wep.work.stop    (work_id: "work_001", status: { ok: true })
+wep.work.start          (work_id: "work_001", label: "Fetching live feed")
+wep.work.stream.open    (stream_id: "feed_001", title: "AAPL — 5m")
+wep.work.stream.update  (stream_id: "feed_001", data: {...})
+wep.work.stream.update  (stream_id: "feed_001", data: {...})
+wep.work.stream.update  (stream_id: "feed_001", data: {...})
+wep.work.stream.close   (stream_id: "feed_001")
+wep.work.stop           (work_id: "work_001", status: { ok: true })
 ```
 
 ### Synchronous job (single data payload)
@@ -443,9 +466,9 @@ wep.work.stop    (work_id: "work_001", status: { ok: true })
 An agent operation that delivers a complete result in one shot — for example, a chart, an image, or a list with clickable links.
 
 ```
-wep.work.start (work_id: "work_002", label: "Building chart")
-wep.data.send  (data_id: "chart_001", kind: "bar-chart", title: "Q2 Revenue", data: {...})
-wep.work.stop  (work_id: "work_002", status: { ok: true })
+wep.work.start      (work_id: "work_002", label: "Building chart")
+wep.work.data.send  (data_id: "chart_001", title: "Q2 Revenue", data: {...})
+wep.work.stop       (work_id: "work_002", status: { ok: true })
 ```
 
 ### Failed job
@@ -453,27 +476,40 @@ wep.work.stop  (work_id: "work_002", status: { ok: true })
 Error information is carried in `wep.work.stop`. Consumers do not need to handle a separate error event type for job lifecycle failures — every job closes with `wep.work.stop` regardless of outcome.
 
 ```
-wep.work.start (work_id: "work_003", label: "Fetching report")
-wep.work.stop  (work_id: "work_003", status: { ok: false, error: "Upstream timeout", detail: "Service responded 504 after 10s" })
+wep.work.start  (work_id: "work_003", label: "Fetching report")
+wep.work.stop   (work_id: "work_003", status: { ok: false, error: "Upstream timeout", detail: "Service responded 504 after 10s" })
+```
+
+### Mixed turn (text interleaved with job output)
+
+`wep.text.delta` events are independent of job lifecycle and may appear before, during, or after a job within the same turn.
+
+```
+wep.text.delta          (text: "Let me check on that.")
+wep.work.start          (work_id: "work_004", label: "Querying database")
+wep.work.data.send      (data_id: "result_001", title: "Q3 Results", data: {...})
+wep.work.stop           (work_id: "work_004", status: { ok: true })
+wep.text.delta          (text: "Here are the Q3 results.")
+[DONE]
 ```
 
 ---
 
 ## Appendix C — Glossary
 
-| Term                       | Definition                                                                                               |
-| -------------------------- | -------------------------------------------------------------------------------------------------------- |
-| SSE                        | Server-Sent Events. An HTTP-based protocol for unidirectional server-to-client event streaming.          |
-| CloudEvents                | A CNCF specification defining a common envelope for events. <https://cloudevents.io>                     |
-| WEP stream                 | An SSE stream that conforms to the Workspace Event Protocol.                                             |
-| Turn                       | A single request-response cycle: one user input and the agent's complete response.                       |
-| work_id                    | An identifier correlating a `wep.work.start` event to its corresponding `wep.work.stop` event.          |
-| stream_id                  | An identifier scoped to a session, correlating open, update, and close events for a single data payload. |
-| data_id                    | An identifier for a single-shot data payload delivered via `wep.data.send`.                              |
-| Correlation ID             | The CloudEvents `id` field. Uniquely identifies each event for tracking and routing.                     |
-| Request-response profile   | WEP connection model in which the stream closes after each turn.                                         |
-| Persistent session profile | WEP connection model in which the stream remains open across turns.                                      |
+| Term                       | Definition                                                                                                     |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| SSE                        | Server-Sent Events. An HTTP-based protocol for unidirectional server-to-client event streaming.                |
+| CloudEvents                | A CNCF specification defining a common envelope for events. <https://cloudevents.io>                           |
+| WEP stream                 | An SSE stream that conforms to the Workspace Event Protocol.                                                   |
+| Turn                       | A single request-response cycle: one user input and the agent's complete response.                             |
+| work_id                    | An identifier correlating a `wep.work.start` event to its corresponding `wep.work.stop` event.                 |
+| stream_id                  | An identifier scoped to a job, correlating open, update, and close events for a single streaming data payload. |
+| data_id                    | An identifier for a single-shot data payload delivered via `wep.work.data.send`.                               |
+| Correlation ID             | The CloudEvents `id` field. Uniquely identifies each event for tracking and routing.                           |
+| Request-response profile   | WEP connection model in which the stream closes after each turn.                                               |
+| Persistent session profile | WEP connection model in which the stream remains open across turns.                                            |
 
 ---
 
-*Workspace Event Protocol 0.1 — nanotasher/wep*
+*Workspace Event Protocol 0.2 — nanotasher/wep*
